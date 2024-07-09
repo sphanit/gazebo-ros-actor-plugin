@@ -4,7 +4,10 @@
 #include <ros/ros.h>
 #include <ros/callback_queue.h>
 #include <geometry_msgs/Twist.h>
+#include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
+#include <tf2/utils.h>
+
 
 #include <string>
 #include <queue>
@@ -60,6 +63,10 @@ class GazeboRosActorCommand : public ModelPlugin {
   /// \brief Subscribers for velocity and path commands.
   ros::Subscriber vel_sub_;
   ros::Subscriber path_sub_;
+
+  /// \brief Publisher for human actors
+  ros::Publisher actor_pub_;
+  std::string name_;
 
   /// \brief Custom callback queues for velocity and path commands.
   ros::CallbackQueue vel_queue_;
@@ -134,6 +141,7 @@ class GazeboRosActorCommand : public ModelPlugin {
 
   /// \brief Data structure for saving velocity command
   std::queue<ignition::math::Vector3d> cmd_queue_;
+
 };
 }
 

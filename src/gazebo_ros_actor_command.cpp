@@ -12,6 +12,8 @@ using namespace gazebo;
 
 #define _USE_MATH_DEFINES
 #define WALKING_ANIMATION "walking"
+#define STANDING_ANIMATION "standing"
+
 
 /////////////////////////////////////////////////
 GazeboRosActorCommand::GazeboRosActorCommand() {
@@ -85,6 +87,7 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf)
   this->sdf_ = _sdf;
   this->actor_ = boost::dynamic_pointer_cast<physics::Actor>(_model);
   this->world_ = this->actor_->GetWorld();
+  this->name_ = this->actor_->GetName();
   this->Reset();
   // Create ROS node handle
   this->ros_node_ = new ros::NodeHandle();
@@ -113,6 +116,8 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf)
         &path_queue_);
   this->path_sub_ = ros_node_->subscribe(path_so);
 
+  this->actor_pub_ = ros_node_->advertise<nav_msgs::Odometry>(this->name_+"/odom", 10); 
+
   // Create a thread for the path callback queue
   this->pathCallbackQueueThread_ =
       boost::thread(boost::bind(&GazeboRosActorCommand::PathQueueThread, this));
@@ -127,8 +132,9 @@ void GazeboRosActorCommand::Reset() {
   // Reset last update time and target pose index
   this->last_update_ = 0;
   this->idx_ = 0;
-  // Initialize target poses vector with origin
-  this->target_poses_.push_back(ignition::math::Vector3d(0.0, 0.0, 0.0));
+  // Initialize target poses vector with the current pose
+  ignition::math::Pose3d pose = this->actor_->WorldPose();
+  this->target_poses_.push_back(ignition::math::Vector3d(pose.Pos().X(),pose.Pos().Y(),pose.Rot().Yaw()));
   // Set target pose to the current pose
   this->target_pose_ = this->target_poses_.at(this->idx_);
 
@@ -136,10 +142,14 @@ void GazeboRosActorCommand::Reset() {
   auto skelAnims = this->actor_->SkeletonAnimations();
   if (skelAnims.find(WALKING_ANIMATION) == skelAnims.end()) {
     gzerr << "Skeleton animation " << WALKING_ANIMATION << " not found.\n";
-  } else {
+    }
+  else if(skelAnims.find(STANDING_ANIMATION) == skelAnims.end()) {
+    gzerr << "Skeleton animation " << STANDING_ANIMATION << " not found.\n";
+    }
+  else {
     // Create custom trajectory
     this->trajectoryInfo_.reset(new physics::TrajectoryInfo());
-    this->trajectoryInfo_->type = WALKING_ANIMATION;
+    this->trajectoryInfo_->type = STANDING_ANIMATION;
     this->trajectoryInfo_->duration = 1.0;
 
     // Set the actor's trajectory to the custom trajectory
@@ -183,7 +193,19 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
   ignition::math::Pose3d pose = this->actor_->WorldPose();
   ignition::math::Vector3d rpy = pose.Rot().Euler();
 
+  nav_msgs::Odometry human_odom;
+  human_odom.header.frame_id = "map"; 
+  human_odom.header.stamp = ros::Time::now();
+  human_odom.pose.pose.position.x = pose.Pos().X();
+  human_odom.pose.pose.position.y = pose.Pos().Y();
+  // Set the rotation of the human in odom
+  tf2::Quaternion quaternion_tf2;
+  quaternion_tf2.setRPY(0, 0, rpy.Z() - M_PI/2);
+  geometry_msgs::Quaternion quaternion = tf2::toMsg(quaternion_tf2);
+  human_odom.pose.pose.orientation = quaternion;
+
   if (this->follow_mode_ == "path") {
+    this->trajectoryInfo_->type = WALKING_ANIMATION;
     ignition::math::Vector2d target_pos_2d(this->target_pose_.X(),
                                            this->target_pose_.Y());
     ignition::math::Vector2d current_pos_2d(pose.Pos().X(),
@@ -202,6 +224,7 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
         // All targets have been accomplished, stop moving
         pos.X() = 0;
         pos.Y() = 0;
+        this->trajectoryInfo_->type = STANDING_ANIMATION;
       }
     }
 
@@ -218,6 +241,7 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
       yaw = atan2(pos.Y(), pos.X()) + default_rotation_ - rpy.Z();
       yaw.Normalize();
     }
+    
     if (yaw < 0)
       rot_sign = -1;
     // Check if required angular displacement is greater than tolerance
@@ -225,17 +249,24 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
 
       pose.Rot() = ignition::math::Quaterniond(default_rotation_, 0, rpy.Z()+
             rot_sign*this->ang_velocity_ * dt);
+      human_odom.twist.twist.angular.z = rot_sign*this->ang_velocity_;
     } 
     else {
         // Move towards the target position
         pose.Pos().X() += pos.X() * this->lin_velocity_ * dt;
         pose.Pos().Y() += pos.Y() * this->lin_velocity_ * dt;
+        human_odom.twist.twist.linear.x = pos.X() * this->lin_velocity_;
+        human_odom.twist.twist.linear.y = pos.Y() * this->lin_velocity_;
 
         pose.Rot() = ignition::math::Quaterniond(
           default_rotation_, 0, rpy.Z()+yaw.Radian());
+        human_odom.twist.twist.angular.z = yaw.Radian()/dt;
+
     }
+
   }
   else if (this->follow_mode_ == "velocity") {
+    this->trajectoryInfo_->type = WALKING_ANIMATION;
     if (!this->cmd_queue_.empty()) {
       this->target_vel_.Pos().X() = this->cmd_queue_.front().X();
       this->target_vel_.Rot() = ignition::math::Quaterniond(
@@ -247,10 +278,18 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
                       cos(pose.Rot().Euler().Z() - default_rotation_) * dt;
     pose.Pos().Y() += this->target_vel_.Pos().X() *
                       sin(pose.Rot().Euler().Z() - default_rotation_) * dt;
+    human_odom.twist.twist.linear.x = this->target_vel_.Pos().X() *
+                      cos(pose.Rot().Euler().Z() - default_rotation_);
+    human_odom.twist.twist.linear.y = this->target_vel_.Pos().X() *
+                      sin(pose.Rot().Euler().Z() - default_rotation_);
 
     pose.Rot() = ignition::math::Quaterniond(
       default_rotation_, 0, rpy.Z()+this->target_vel_.Rot().Euler().Z()*dt);
+    human_odom.twist.twist.angular.z = this->target_vel_.Rot().Euler().Z();
   }
+
+  this->actor_pub_.publish(human_odom);
+
 
   // Distance traveled is used to coordinate motion with the walking animation
   auto displacement = pose.Pos() - this->actor_->WorldPose().Pos();
