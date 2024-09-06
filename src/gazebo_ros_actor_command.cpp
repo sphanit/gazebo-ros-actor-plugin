@@ -5,8 +5,8 @@
 #include <cmath>
 #include <functional>
 
-#include "gazebo/physics/physics.hh"
 #include <ignition/math.hh>
+#include "gazebo/physics/physics.hh"
 
 using namespace gazebo;
 
@@ -28,6 +28,10 @@ GazeboRosActorCommand::~GazeboRosActorCommand() {
   this->path_queue_.disable();
   this->pathCallbackQueueThread_.join();
 
+  this->abort_queue_.clear();
+  this->abort_queue_.disable();
+  this->abortCallbackQueueThread_.join();
+
   this->ros_node_->shutdown();
   delete this->ros_node_;
 }
@@ -39,11 +43,13 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model,
   this->follow_mode_ = "velocity";
   this->vel_topic_ = "/cmd_vel";
   this->path_topic_ = "/cmd_path";
+  this->abort_topic_ = "/abort_goal";
   this->lin_tolerance_ = 0.1;
   this->lin_velocity_ = 1;
   this->ang_tolerance_ = IGN_DTOR(5);
   this->ang_velocity_ = IGN_DTOR(10);
   this->animation_factor_ = 4.0;
+  this->abort_ = false;
 
   // Override default parameter values with values from SDF
   if (_sdf->HasElement("follow_mode")) {
@@ -54,6 +60,9 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model,
   }
   if (_sdf->HasElement("path_topic")) {
     this->path_topic_ = _sdf->Get<std::string>("path_topic");
+  }
+  if (_sdf->HasElement("abort_topic")) {
+    this->abort_topic_ = _sdf->Get<std::string>("abort_topic");
   }
   if (_sdf->HasElement("linear_tolerance")) {
     this->lin_tolerance_ = _sdf->Get<double>("linear_tolerance");
@@ -113,12 +122,24 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model,
       ros::VoidPtr(), &path_queue_);
   this->path_sub_ = ros_node_->subscribe(path_so);
 
+  // Subscribe to the abort commands
+  ros::SubscribeOptions abort_so =
+      ros::SubscribeOptions::create<std_msgs::Bool>(
+          abort_topic_, 1,
+          boost::bind(&GazeboRosActorCommand::AbortCallback, this, _1),
+          ros::VoidPtr(), &abort_queue_);
+  this->abort_sub_ = ros_node_->subscribe(abort_so);
+
   this->actor_pub_ =
       ros_node_->advertise<nav_msgs::Odometry>(this->name_ + "/odom", 10);
 
   // Create a thread for the path callback queue
   this->pathCallbackQueueThread_ =
       boost::thread(boost::bind(&GazeboRosActorCommand::PathQueueThread, this));
+
+  // Create a thread for the abort callback queue
+  this->abortCallbackQueueThread_ = boost::thread(
+      boost::bind(&GazeboRosActorCommand::AbortQueueThread, this));
 
   // Connect the OnUpdate function to the WorldUpdateBegin event.
   this->connections_.push_back(event::Events::ConnectWorldUpdateBegin(std::bind(
@@ -165,6 +186,9 @@ void GazeboRosActorCommand::VelCallback(
 void GazeboRosActorCommand::PathCallback(const nav_msgs::Path::ConstPtr &msg) {
   // Extract the poses from the Path message
   const std::vector<geometry_msgs::PoseStamped> &poses = msg->poses;
+  this->target_poses_.clear();
+  this->idx_ = 0;
+  this->abort_ = false;
 
   // Extract the x, y, and yaw from each pose and store it as a target
   for (size_t i = 0; i < poses.size(); ++i) {
@@ -180,6 +204,10 @@ void GazeboRosActorCommand::PathCallback(const nav_msgs::Path::ConstPtr &msg) {
     mat.getRPY(roll, pitch, yaw);
     this->target_poses_.push_back(ignition::math::Vector3d(x, y, yaw));
   }
+}
+
+void GazeboRosActorCommand::AbortCallback(const std_msgs::Bool::ConstPtr &msg) {
+  this->abort_ = msg->data;
 }
 
 /////////////////////////////////////////////////
@@ -208,8 +236,15 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
     ignition::math::Vector2d pos = target_pos_2d - current_pos_2d;
     double distance = pos.Length();
 
+    if (this->abort_ || this->target_poses_.empty()) {
+      this->target_poses_.clear();
+      this->idx_ = 0;
+      pos.X() = 0;
+      pos.Y() = 0;
+    }
+
     // Check if actor has reached current target position
-    if (distance < this->lin_tolerance_) {
+    else if (distance < this->lin_tolerance_) {
       // If there are more targets, choose new target
       if (this->idx_ < this->target_poses_.size() - 1) {
         this->ChooseNewTarget();
@@ -237,11 +272,9 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
       yaw.Normalize();
     }
 
-    if (yaw < 0)
-      rot_sign = -1;
+    if (yaw < 0) rot_sign = -1;
     // Check if required angular displacement is greater than tolerance
     if (std::abs(yaw.Radian()) > this->ang_tolerance_) {
-
       pose.Rot() = ignition::math::Quaterniond(
           default_rotation_, 0, rpy.Z() + rot_sign * this->ang_velocity_ * dt);
       human_odom.twist.twist.angular.z = rot_sign * this->ang_velocity_;
@@ -314,6 +347,13 @@ void GazeboRosActorCommand::PathQueueThread() {
 
   while (this->ros_node_->ok())
     this->path_queue_.callAvailable(ros::WallDuration(timeout));
+}
+
+void GazeboRosActorCommand::AbortQueueThread() {
+  static const double timeout = 0.01;
+
+  while (this->ros_node_->ok())
+    this->abort_queue_.callAvailable(ros::WallDuration(timeout));
 }
 
 GZ_REGISTER_MODEL_PLUGIN(GazeboRosActorCommand)

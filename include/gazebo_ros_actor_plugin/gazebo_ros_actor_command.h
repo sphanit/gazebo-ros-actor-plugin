@@ -1,16 +1,16 @@
 #ifndef GAZEBO_ROS_ACTOR_PLUGIN_INCLUDE_GAZEBO_ROS_ACTOR_COMMAND
 #define GAZEBO_ROS_ACTOR_PLUGIN_INCLUDE_GAZEBO_ROS_ACTOR_COMMAND
 
-#include <ros/ros.h>
-#include <ros/callback_queue.h>
 #include <geometry_msgs/Twist.h>
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
+#include <ros/callback_queue.h>
+#include <ros/ros.h>
+#include <std_msgs/Bool.h>
 #include <tf2/utils.h>
 
-
-#include <string>
 #include <queue>
+#include <string>
 #include <vector>
 
 #include "gazebo/common/Plugin.hh"
@@ -47,6 +47,10 @@ class GazeboRosActorCommand : public ModelPlugin {
   /// \param[in] _model Pointer to the incoming path message.
   void PathCallback(const nav_msgs::Path::ConstPtr &msg);
 
+  /// \brief Callback function for receiving abort commands from a publisher.
+  /// \param[in] _model Pointer to the incoming path message.
+  void AbortCallback(const std_msgs::Bool::ConstPtr &msg);
+
   /// \brief Function that is called every update cycle.
   /// \param[in] _info Timing information.
   void OnUpdate(const common::UpdateInfo &_info);
@@ -57,12 +61,16 @@ class GazeboRosActorCommand : public ModelPlugin {
   /// \brief Custom callback queue thread for path commands.
   void PathQueueThread();
 
+  /// \brief Custom callback queue thread for path commands.
+  void AbortQueueThread();
+
   /// \brief ROS node handle.
   ros::NodeHandle *ros_node_;
 
   /// \brief Subscribers for velocity and path commands.
   ros::Subscriber vel_sub_;
   ros::Subscriber path_sub_;
+  ros::Subscriber abort_sub_;
 
   /// \brief Publisher for human actors
   ros::Publisher actor_pub_;
@@ -71,14 +79,17 @@ class GazeboRosActorCommand : public ModelPlugin {
   /// \brief Custom callback queues for velocity and path commands.
   ros::CallbackQueue vel_queue_;
   ros::CallbackQueue path_queue_;
+  ros::CallbackQueue abort_queue_;
 
   /// \brief Custom callback queue threads for velocity and path commands.
   boost::thread velCallbackQueueThread_;
   boost::thread pathCallbackQueueThread_;
+  boost::thread abortCallbackQueueThread_;
 
   /// \brief Topic names for velocity and path commands.
   std::string vel_topic_;
   std::string path_topic_;
+  std::string abort_topic_;
 
   /// \brief Pointer to the parent actor.
   physics::ActorPtr actor_;
@@ -125,6 +136,9 @@ class GazeboRosActorCommand : public ModelPlugin {
   /// \brief Index of current target pose
   int idx_;
 
+  /// \brief abort flag
+  bool abort_;
+
   /// \brief Maximum allowed distance between actor and target pose
   /// during path-following
   double lin_tolerance_;
@@ -141,8 +155,7 @@ class GazeboRosActorCommand : public ModelPlugin {
 
   /// \brief Data structure for saving velocity command
   std::queue<ignition::math::Vector3d> cmd_queue_;
-
 };
-}
+}  // namespace gazebo
 
-#endif // COMMAND_ACTOR_H
+#endif  // COMMAND_ACTOR_H
