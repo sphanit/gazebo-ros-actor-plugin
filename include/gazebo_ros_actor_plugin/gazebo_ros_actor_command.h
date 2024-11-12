@@ -23,7 +23,7 @@ namespace gazebo {
 /// a path or velocity published by other ROS node.
 
 class GazeboRosActorCommand : public ModelPlugin {
- public:
+public:
   /// \brief Constructor
   GazeboRosActorCommand();
 
@@ -38,7 +38,7 @@ class GazeboRosActorCommand : public ModelPlugin {
   // \brief Reset the plugin.
   virtual void Reset();
 
- private:
+private:
   /// \brief Callback function for receiving velocity commands from a publisher.
   /// \param[in] _model Pointer to the incoming velocity message.
   void VelCallback(const geometry_msgs::Twist::ConstPtr &msg);
@@ -149,6 +149,7 @@ class GazeboRosActorCommand : public ModelPlugin {
 
   /// \brief Default rotation for an actor
   double default_rotation_;
+  double default_rotation_x_;
 
   /// \brief Helper function to choose a new target pose
   void ChooseNewTarget();
@@ -156,6 +157,6 @@ class GazeboRosActorCommand : public ModelPlugin {
   /// \brief Data structure for saving velocity command
   std::queue<ignition::math::Vector3d> cmd_queue_;
 };
-}  // namespace gazebo
+} // namespace gazebo
 
-#endif  // COMMAND_ACTOR_H
+#endif // COMMAND_ACTOR_H

@@ -82,6 +82,9 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model,
   if (_sdf->HasElement("default_rotation")) {
     this->default_rotation_ = _sdf->Get<double>("default_rotation");
   }
+  if (_sdf->HasElement("default_rotation_x")) {
+    this->default_rotation_x_ = _sdf->Get<double>("default_rotation_x");
+  }
 
   // Check if ROS node for Gazebo has been initialized
   if (!ros::isInitialized()) {
@@ -279,7 +282,8 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
     // Check if required angular displacement is greater than tolerance
     if (std::abs(yaw.Radian()) > this->ang_tolerance_) {
       pose.Rot() = ignition::math::Quaterniond(
-          default_rotation_, 0, rpy.Z() + rot_sign * this->ang_velocity_ * dt);
+          default_rotation_x_, 0,
+          rpy.Z() + rot_sign * this->ang_velocity_ * dt);
       human_odom.twist.twist.angular.z = rot_sign * this->ang_velocity_;
     } else {
       // Move towards the target position
@@ -288,7 +292,7 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
       human_odom.twist.twist.linear.x = pos.X() * this->lin_velocity_;
       human_odom.twist.twist.linear.y = pos.Y() * this->lin_velocity_;
 
-      pose.Rot() = ignition::math::Quaterniond(default_rotation_, 0,
+      pose.Rot() = ignition::math::Quaterniond(default_rotation_x_, 0,
                                                rpy.Z() + yaw.Radian());
       human_odom.twist.twist.angular.z = yaw.Radian() / dt;
     }
@@ -314,7 +318,7 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
         sin(pose.Rot().Euler().Z() - default_rotation_);
 
     pose.Rot() = ignition::math::Quaterniond(
-        default_rotation_, 0,
+        default_rotation_x_, 0,
         rpy.Z() + this->target_vel_.Rot().Euler().Z() * dt);
     human_odom.twist.twist.angular.z = this->target_vel_.Rot().Euler().Z();
   }
